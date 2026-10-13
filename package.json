@@ -1,6 +1,6 @@
 {
   "name": "@prjct.app/pi-palette",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "34 Pi color themes as data: live preview, favorites, synced sessions, weekly versioned backups, and your own library from pi-themes by file or optional account sync.",
   "type": "module",
   "license": "MIT",
@@ -15,7 +15,7 @@
     "extensions": [
       "./index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/prjct-app/pi-palette/main/docs/cover-v2.png"
+    "image": "https://raw.githubusercontent.com/prjct-app/pi-palette/main/docs/cover-v3.png"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -44,7 +44,8 @@
     "palettes.ts",
     "sync.ts",
     "docs/cover-v2.png",
-    "docs/cover.png"
+    "docs/cover.png",
+    "docs/cover-v3.png"
   ],
   "scripts": {
     "test": "export PI_CODING_AGENT_DIR=\"$(mktemp -d)\" PRJCT_HOME=\"$(mktemp -d)\" && node --import tsx --test --test-concurrency=1 *.test.ts *.test.mjs",

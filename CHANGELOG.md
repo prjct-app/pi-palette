@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.8
+
+- Correct the cover title to pi-palette and connect the updated image in the README and Pi gallery.
+
+
 ## 0.4.7 — 2026-10-13
 
 - Panel state is one immutable value replaced on every key press; toggling a favorite builds the new list instead of editing the set.
