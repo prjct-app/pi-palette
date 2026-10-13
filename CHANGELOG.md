@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.7 — 2026-10-13
+
+- Panel state is one immutable value replaced on every key press; toggling a favorite builds the new list instead of editing the set.
+- The own-palettes test now writes its library to `${PRJCT_HOME}/pi-palette`, so the bundled-palette count (34 vs 35) stops failing.
+
 ## 0.4.6 — 2026-10-12
 
 - Package: include `migrate.ts`, which 0.4.4 imported but did not ship, so the extension failed to load with "Cannot find module './migrate.ts'".
