@@ -1,6 +1,6 @@
 # pi-palette
 
-[![pi-palette — for PI Agent](https://raw.githubusercontent.com/prjct-app/pi-palette/main/docs/cover-v2.png)](https://pi.dev)
+[![pi-palette — for PI Agent](https://raw.githubusercontent.com/prjct-app/pi-palette/main/docs/cover-v3.png)](https://pi.dev)
 
 34 color themes for Pi, with live preview, favorites, synchronization between open sessions, weekly versioned backups, and your own library from [pi-themes](https://palette.prjct.app).
 
