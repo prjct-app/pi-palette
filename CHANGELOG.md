@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.6 — 2026-10-12
+
+- Package: include `migrate.ts`, which 0.4.4 imported but did not ship, so the extension failed to load with "Cannot find module './migrate.ts'".
+- Themes: write only the HTML export colors Pi's theme schema accepts (`pageBg`, `cardBg`, `infoBg`).
+
 ## 0.4.5 — 2026-10-12
 
 - Themes: write only the HTML export colors Pi's theme schema accepts (`pageBg`, `cardBg`, `infoBg`). The extra keys made Pi 1.1.0 reject every generated theme as invalid.
