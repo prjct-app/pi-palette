@@ -63,9 +63,10 @@ export const DEFAULT_COLORS: Record<string, string> = {
 	thinkingOff: "borderMuted", thinkingMinimal: "dim", thinkingLow: "secondary", thinkingMedium: "accent",
 	thinkingHigh: "warning", thinkingXhigh: "highlight", thinkingMax: "error", bashMode: "bash",
 };
+/** Pi's theme schema accepts only these HTML export colors; any other key makes the theme invalid. */
+export const EXPORT_KEYS = ["pageBg", "cardBg", "infoBg"] as const;
 export const DEFAULT_EXPORT: Record<string, string> = {
-	pageBg: "canvas", cardBg: "surface", infoBg: "surfaceRaised", userMessageBg: "surfaceRaised",
-	toolSuccessBg: "successBg", toolErrorBg: "errorBg", toolPendingBg: "surface",
+	pageBg: "canvas", cardBg: "surface", infoBg: "surfaceRaised",
 };
 
 const ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
@@ -196,7 +197,8 @@ export function themeJson(p: LibraryPalette) {
 	};
 	// A palette's own export block is used as is (Pi fills in what it leaves out).
 	const ownExport = p.export
-		? Object.fromEntries(Object.entries(p.export).filter(([, v]) => v === "" || HEX.test(v) || v in p.vars))
+		? Object.fromEntries(Object.entries(p.export).filter(([k, v]) =>
+			(EXPORT_KEYS as readonly string[]).includes(k) && (v === "" || HEX.test(v) || v in p.vars)))
 		: undefined;
 	return {
 		$schema: "https://pi.dev/theme-schema.json",
