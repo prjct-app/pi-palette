@@ -48,6 +48,21 @@ type Item = { id: string; label: string; meta?: string; tag?: string; palette?: 
 type Category = { id: CategoryId; label: string; blurb: string; empty: string; items: Item[]; count: string };
 type Tool = { key: string; label: string };
 
+/** The panel's state as one immutable value; every key press produces a new one. */
+type PanelState = Readonly<{
+	level: "categories" | "items";
+	category: CategoryId;
+	cursor: Readonly<Partial<Record<CategoryId, string>>>;
+	showDetail: boolean;
+	confirm: string | undefined;
+	busy: boolean;
+	cloudAsked: boolean;
+	applied: boolean;
+	closed: boolean;
+	favorites: ReadonlySet<string>;
+	notice: Readonly<{ text: string; tone: Tone }> | undefined;
+}>;
+
 /** The favorites set, or an empty one with a notice when the favorites file cannot be read. */
 function loadFavorites(): { favorites: Set<string>; notice?: { text: string; tone: Tone } } {
 	try {
@@ -79,29 +94,36 @@ function palettePicker(
 	initial: CategoryId | undefined,
 	done: (value: PickerResult | undefined) => void,
 ): Component & Focusable & { dispose(): void } {
-	const { favorites, notice: favoritesNotice } = loadFavorites();
-	const view = { notice: favoritesNotice as { text: string; tone: Tone } | undefined };
+	const loaded = loadFavorites();
 	const inUse = ctx.ui.theme.name && PALETTES.some((p) => p.id === ctx.ui.theme.name) ? ctx.ui.theme.name : undefined;
-	const state = {
-		level: "categories" as "categories" | "items",
-		category: initial ?? (inUse ? (favorites.has(inUse) ? "favorites" : categoryOf(inUse)) : "favorites") as CategoryId,
-		cursor: {} as Partial<Record<CategoryId, string>>,
-		showDetail: false,
-		confirm: undefined as string | undefined,
-		busy: false,
-		cloudAsked: false,
-		applied: false,
-		closed: false,
+	const startCategory = initial ?? (inUse ? (loaded.favorites.has(inUse) ? "favorites" : categoryOf(inUse)) : "favorites");
+	// The one cell that changes: it holds the panel's current state value, which is always replaced, never edited.
+	const panel: { state: PanelState } = {
+		state: {
+			level: "categories",
+			category: startCategory,
+			cursor: inUse ? { [startCategory]: inUse } : {},
+			showDetail: false,
+			confirm: undefined,
+			busy: false,
+			cloudAsked: false,
+			applied: false,
+			closed: false,
+			favorites: loaded.favorites,
+			notice: loaded.notice,
+		},
 	};
-	if (inUse) state.cursor[state.category] = inUse;
+	const set = (change: Partial<PanelState>): void => {
+		panel.state = { ...panel.state, ...change };
+	};
 
 	const accent = (text: string) => theme.fg("accent", text);
 	const dim = (text: string) => theme.fg("dim", text);
-	const request = () => { if (!state.closed) tui.requestRender(); };
+	const request = () => { if (!panel.state.closed) tui.requestRender(); };
 	const isTheme = (id: CategoryId) => id !== "backups" && id !== "account";
 
 	function categories(): Category[] {
-		const themes = themeCategories(favorites).map((c): Category => ({
+		const themes = themeCategories(panel.state.favorites).map((c): Category => ({
 			id: c.id,
 			label: c.label,
 			blurb: c.blurb,
@@ -129,76 +151,69 @@ function palettePicker(
 		];
 	}
 
-	const category = (): Category => categories().find((c) => c.id === state.category)!;
-	const selected = (c = category()): Item | undefined => c.items.find((i) => i.id === state.cursor[c.id]) ?? c.items[0];
+	const category = (): Category => categories().find((c) => c.id === panel.state.category)!;
+	const selected = (c = category()): Item | undefined => c.items.find((i) => i.id === panel.state.cursor[c.id]) ?? c.items[0];
 
 	const restoreTheme = () => { if (originalTheme && ctx.ui.theme.name !== originalTheme) ctx.ui.setTheme(originalTheme); };
 	const preview = () => {
 		const item = selected();
 		if (!item?.palette) return;
 		const result = ctx.ui.setTheme(item.palette.id);
-		if (!result.success) view.notice = { text: result.error ?? `Could not preview ${item.label}`, tone: "error" };
+		if (!result.success) set({ notice: { text: result.error ?? `Could not preview ${item.label}`, tone: "error" } });
 	};
 	const close = (result: PickerResult | undefined) => {
-		if (state.closed) return;
-		state.closed = true;
-		state.applied = Boolean(result?.apply);
-		if (!state.applied) restoreTheme();
+		if (panel.state.closed) return;
+		set({ closed: true, applied: Boolean(result?.apply) });
+		if (!panel.state.applied) restoreTheme();
 		done(result);
 	};
 	/** The cloud list is fetched the first time Backups is in view, never before. */
 	const askCloud = () => {
-		if (state.category !== "backups" || state.cloudAsked) return;
-		state.cloudAsked = true;
+		if (panel.state.category !== "backups" || panel.state.cloudAsked) return;
+		set({ cloudAsked: true });
 		void host.refreshCloud().then(request, request);
 	};
 
 	const moveCategory = (delta: number) => {
 		const list = categories();
-		const index = list.findIndex((c) => c.id === state.category);
-		state.category = list[Math.max(0, Math.min(list.length - 1, index + delta))]!.id;
-		state.confirm = undefined;
+		const index = list.findIndex((c) => c.id === panel.state.category);
+		set({ category: list[Math.max(0, Math.min(list.length - 1, index + delta))]!.id, confirm: undefined });
 		askCloud();
 	};
 	const moveItem = (delta: number) => {
 		const c = category();
 		if (!c.items.length) return;
 		const index = Math.max(0, c.items.findIndex((i) => i.id === selected(c)?.id));
-		state.cursor[c.id] = c.items[Math.max(0, Math.min(c.items.length - 1, index + delta))]!.id;
-		state.confirm = undefined;
+		set({ cursor: { ...panel.state.cursor, [c.id]: c.items[Math.max(0, Math.min(c.items.length - 1, index + delta))]!.id }, confirm: undefined });
 		if (isTheme(c.id)) preview();
 	};
 	const open = () => {
 		if (!category().items.length) return;
-		state.level = "items";
-		state.showDetail = false;
-		if (isTheme(state.category)) preview();
+		set({ level: "items", showDetail: false });
+		if (isTheme(panel.state.category)) preview();
 	};
 	const back = () => {
-		state.level = "categories";
-		state.confirm = undefined;
+		set({ level: "categories", confirm: undefined });
 		restoreTheme();
 	};
 
 	async function backupNow(): Promise<void> {
-		if (state.busy) return;
-		state.busy = true;
-		view.notice = { text: "Backing up…", tone: "muted" };
+		if (panel.state.busy) return;
+		set({ busy: true, notice: { text: "Backing up…", tone: "muted" } });
 		request();
 		const outcome = await host.backupNow();
 		await host.refreshCloud().catch(() => {});
-		state.busy = false;
-		view.notice = outcome;
+		set({ busy: false, notice: outcome });
 		request();
 	}
 
 	/** Keys the current category adds, at this level and for this item. */
 	function tools(): Tool[] {
 		const c = category();
-		const item = state.level === "items" ? selected(c) : undefined;
+		const item = panel.state.level === "items" ? selected(c) : undefined;
 		if (isTheme(c.id)) {
 			if (!item) return [];
-			return [{ key: "f", label: favorites.has(item.id) ? "unfavorite" : "favorite" }, { key: "a", label: "apply" }];
+			return [{ key: "f", label: panel.state.favorites.has(item.id) ? "unfavorite" : "favorite" }, { key: "a", label: "apply" }];
 		}
 		if (c.id === "backups") return [{ key: "b", label: "back up now" }, ...(item ? [{ key: "r", label: "restore" }] : [])];
 		const connected = host.info().connected;
@@ -212,9 +227,9 @@ function palettePicker(
 	}
 
 	function navigation(): Tool[] {
-		if (state.level === "categories") return [{ key: "↑↓", label: "category" }, { key: "→", label: "open" }, { key: "esc", label: "close" }];
+		if (panel.state.level === "categories") return [{ key: "↑↓", label: "category" }, { key: "→", label: "open" }, { key: "esc", label: "close" }];
 		return [
-			{ key: "↑↓", label: isTheme(state.category) ? "preview" : "select" },
+			{ key: "↑↓", label: isTheme(panel.state.category) ? "preview" : "select" },
 			{ key: "←", label: "categories" },
 			{ key: "esc", label: "back" },
 		];
@@ -226,7 +241,7 @@ function palettePicker(
 		const lead = chosen && focused ? accent(theme.bold("›")) : " ";
 		const name = chosen ? accent(theme.bold(item.label)) : item.label;
 		if (item.palette) {
-			const star = favorites.has(item.id) && c.id !== "favorites" ? accent("★") : " ";
+			const star = panel.state.favorites.has(item.id) && c.id !== "favorites" ? accent("★") : " ";
 			const chips = [0, 2, 4].map((i) => paintChip(item.palette!.swatches[i]!.hex)).join(" ");
 			return `${lead}${star} ${name} ${chips}`;
 		}
@@ -248,7 +263,7 @@ function palettePicker(
 			const width = Math.max(...p.swatches.map((s) => s.name.length));
 			return [
 				theme.bold(p.label),
-				`${theme.fg("success", "Live preview")}${dim(` · ${favorites.has(p.id) ? "★ Favorite · " : ""}${groupOf(p.id)}`)}`,
+				`${theme.fg("success", "Live preview")}${dim(` · ${panel.state.favorites.has(p.id) ? "★ Favorite · " : ""}${groupOf(p.id)}`)}`,
 				"",
 				accent("Palette"),
 				process.env.NO_COLOR ? p.swatches.map((s) => s.name).join(" · ") : p.swatches.map((s) => paintChip(s.hex)).join(" "),
@@ -335,7 +350,7 @@ function palettePicker(
 			const item = selected(c);
 
 			const pane = { left: [] as string[], right: [] as string[] };
-			if (state.level === "categories") {
+			if (panel.state.level === "categories") {
 				const index = list.findIndex((x) => x.id === c.id);
 				pane.left = list.map((x) => {
 					const chosen = x.id === c.id;
@@ -360,20 +375,20 @@ function palettePicker(
 				pane.right = detail(c, item);
 			}
 
-			const confirm = state.confirm ? { text: `Press r again to restore ${item?.label ?? "it"} · any other key cancels`, tone: "warning" as Tone } : undefined;
-			const message = confirm ?? view.notice;
+			const confirm = panel.state.confirm ? { text: `Press r again to restore ${item?.label ?? "it"} · any other key cancels`, tone: "warning" as Tone } : undefined;
+			const message = confirm ?? panel.state.notice;
 			const showing = PALETTES.find((p) => p.id === ctx.ui.theme.name)?.label;
-			const title = ` ${accent(theme.bold("Palette"))}  ${dim(`${PALETTES.length} themes · ${favorites.size} favorites${showing ? ` · ${showing}` : ""}`)}`;
+			const title = ` ${accent(theme.bold("Palette"))}  ${dim(`${PALETTES.length} themes · ${panel.state.favorites.size} favorites${showing ? ` · ${showing}` : ""}`)}`;
 			const body = Array.from({ length: bodyHeight }, (_, i) => {
 				if (!wide) {
-					const shown = state.level === "items" && state.showDetail ? pane.right : pane.left;
+					const shown = panel.state.level === "items" && panel.state.showDetail ? pane.right : pane.left;
 					return ` ${fit(shown[i] ?? "", Math.max(1, width - 2))} `;
 				}
 				return `${fit(pane.left[i] ?? "", leftWidth)} ${dim("│")} ${fit(pane.right[i] ?? "", rightWidth)}`;
 			});
 			const own = tools();
 			const nav = navigation();
-			if (!wide && state.level === "items") nav.splice(1, 0, { key: "tab", label: state.showDetail ? "list" : "details" });
+			if (!wide && panel.state.level === "items") nav.splice(1, 0, { key: "tab", label: panel.state.showDetail ? "list" : "details" });
 			return [
 				fit(title, width),
 				dim("─".repeat(width)),
@@ -385,48 +400,45 @@ function palettePicker(
 		},
 		handleInput(data: string): void {
 			const c = category();
-			const item = state.level === "items" ? selected(c) : undefined;
-			const wasConfirm = state.confirm;
-			state.confirm = undefined;
-			if (!state.busy) view.notice = undefined;
+			const item = panel.state.level === "items" ? selected(c) : undefined;
+			const wasConfirm = panel.state.confirm;
+			set(panel.state.busy ? { confirm: undefined } : { confirm: undefined, notice: undefined });
 
 			// Navigation, the same everywhere.
 			if (matchesKey(data, Key.escape) || data === "q") {
-				if (state.level === "items") back();
+				if (panel.state.level === "items") back();
 				else close(undefined);
 			} else if (matchesKey(data, Key.up) || data === "k") {
-				if (state.level === "categories") moveCategory(-1); else moveItem(-1);
+				if (panel.state.level === "categories") moveCategory(-1); else moveItem(-1);
 			} else if (matchesKey(data, Key.down) || data === "j") {
-				if (state.level === "categories") moveCategory(1); else moveItem(1);
-			} else if (matchesKey(data, Key.right) || (matchesKey(data, Key.enter) && state.level === "categories")) {
-				if (state.level === "categories") open();
+				if (panel.state.level === "categories") moveCategory(1); else moveItem(1);
+			} else if (matchesKey(data, Key.right) || (matchesKey(data, Key.enter) && panel.state.level === "categories")) {
+				if (panel.state.level === "categories") open();
 			} else if (matchesKey(data, Key.left)) {
-				if (state.level === "items") back();
+				if (panel.state.level === "items") back();
 			} else if (matchesKey(data, Key.tab)) {
-				if (state.level === "items") state.showDetail = !state.showDetail;
+				if (panel.state.level === "items") set({ showDetail: !panel.state.showDetail });
 			}
 			// The category's own keys.
 			else if (isTheme(c.id) && item?.palette && data === "f") {
 				try {
-					const saved = toggleFavorite(item.id);
-					favorites.clear();
-					for (const id of saved) favorites.add(id);
+					set({ favorites: toggleFavorite(item.id) });
 				}
-				catch (error) { view.notice = { text: `Could not save favorite: ${error instanceof Error ? error.message : String(error)}`, tone: "error" }; }
+				catch (error) { set({ notice: { text: `Could not save favorite: ${error instanceof Error ? error.message : String(error)}`, tone: "error" } }); }
 				// Unstarring inside Favorites moves the cursor to what is left.
-				if (c.id === "favorites" && !favorites.has(item.id)) {
+				if (c.id === "favorites" && !panel.state.favorites.has(item.id)) {
 					const rest = category().items;
 					if (!rest.length) back();
-					else { state.cursor.favorites = rest[0]!.id; preview(); }
+					else { set({ cursor: { ...panel.state.cursor, favorites: rest[0]!.id } }); preview(); }
 				}
 			} else if (isTheme(c.id) && item?.palette && (data === "a" || matchesKey(data, Key.enter))) {
 				preview();
-				if (!view.notice) close({ apply: item.id });
+				if (!panel.state.notice) close({ apply: item.id });
 			} else if (c.id === "backups" && data === "b") {
 				void backupNow();
 			} else if (c.id === "backups" && item && data === "r") {
 				if (wasConfirm === item.id) close({ restore: item.id });
-				else state.confirm = item.id;
+				else set({ confirm: item.id });
 			} else if (c.id === "account" && item && matchesKey(data, Key.enter)) {
 				close({ action: item.id as PaletteAction });
 			} else if (c.id === "account" && data === "s" && host.info().connected) close({ action: "sync" });
@@ -438,8 +450,8 @@ function palettePicker(
 		},
 		invalidate(): void {},
 		dispose(): void {
-			if (!state.applied) restoreTheme();
-			state.closed = true;
+			if (!panel.state.applied) restoreTheme();
+			set({ closed: true });
 		},
 		get focused() { return true; },
 		set focused(_value: boolean) {},

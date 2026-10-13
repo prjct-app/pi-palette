@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-// A person's library on disk before the extension loads.
+// A person's library on disk before the extension loads. Palette data lives in ${PRJCT_HOME}/pi-palette.
 const agent = mkdtempSync(join(tmpdir(), "pi-palette-agent-"));
+const home = mkdtempSync(join(tmpdir(), "pi-palette-home-"));
 process.env.PI_CODING_AGENT_DIR = agent;
-mkdirSync(join(agent, "pi-palette"), { recursive: true });
+process.env.PRJCT_HOME = home;
+mkdirSync(join(home, "pi-palette"), { recursive: true });
 const vars = { canvas: "#101010", text: "#F0F0F0", accent: "#FF8800", secondary: "#00AAFF", highlight: "#FF44AA", success: "#44DD88", warning: "#FFCC00", error: "#FF4455" };
-writeFileSync(join(agent, "pi-palette", "library.json"), JSON.stringify({
+writeFileSync(join(home, "pi-palette", "library.json"), JSON.stringify({
 	format: "pi-palette", version: 1,
 	palettes: [{ id: "sunrise", label: "Sunrise", vars }, { id: "dracula", label: "My Dracula", vars }],
 }));
