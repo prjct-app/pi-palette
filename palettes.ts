@@ -16,16 +16,23 @@ function toPalette(p: LibraryPalette, bundled: boolean): Palette {
 }
 
 /** Errors reading the person's library; the picker shows it instead of failing. */
-export let LIBRARY_ERROR = "";
+/** Set when the library file cannot be read; read it through libraryError(). */
+const libraryState = { error: "" };
+export const libraryError = (): string => libraryState.error;
+
+/** The person's own palettes; an unreadable library is reported and treated as empty. */
+function readOwnPalettes(): LibraryPalette[] {
+	try {
+		return readUserLibrary()?.palettes ?? [];
+	} catch (error) {
+		libraryState.error = `Your palette library could not be read: ${error instanceof Error ? error.message : String(error)}`;
+		return [];
+	}
+}
 
 function loadPalettes(): Palette[] {
 	const bundled = readBundled().palettes;
-	let own: LibraryPalette[] = [];
-	try {
-		own = readUserLibrary()?.palettes ?? [];
-	} catch (error) {
-		LIBRARY_ERROR = `Your palette library could not be read: ${error instanceof Error ? error.message : String(error)}`;
-	}
+	const own = readOwnPalettes();
 	const bundledIds = new Set(bundled.map((p) => p.id));
 	const ownIds = new Set(own.map((p) => p.id));
 	return mergePalettes(bundled, own).map((p) => toPalette(p, bundledIds.has(p.id) && !ownIds.has(p.id)));

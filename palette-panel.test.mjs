@@ -54,19 +54,19 @@ test("renders at narrow and wide widths, at both levels", async () => {
 test("categories on the left, the highlighted one's list on the right; opening shows details and its keys", async () => {
 	const { result, theme: left } = await drive((panel, screen, ui) => {
 		// Opens on the category of the theme in use (Orchard is from photos).
-		let s = screen();
-		assert.match(s, /› From photos/);
-		assert.match(s, /Backups/);
-		assert.match(s, /Account/);
-		assert.match(s, /Colors taken from photographs/);
-		assert.match(s, /Glacier/);
-		assert.match(s, /↑↓ category · → open · esc close/);
+		const s = { value: screen() };
+		assert.match(s.value, /› From photos/);
+		assert.match(s.value, /Backups/);
+		assert.match(s.value, /Account/);
+		assert.match(s.value, /Colors taken from photographs/);
+		assert.match(s.value, /Glacier/);
+		assert.match(s.value, /↑↓ category · → open · esc close/);
 		panel.handleInput(KEY.right);
-		s = screen();
-		assert.match(s, /‹ From photos/);
-		assert.match(s, /Live preview/);
-		assert.match(s, /f favorite · a apply/);
-		assert.match(s, /↑↓ preview · ← categories · esc back/);
+		s.value = screen();
+		assert.match(s.value, /‹ From photos/);
+		assert.match(s.value, /Live preview/);
+		assert.match(s.value, /f favorite · a apply/);
+		assert.match(s.value, /↑↓ preview · ← categories · esc back/);
 		panel.handleInput(KEY.up); // Orchard is the last one from photos
 		assert.match(screen(), /Tidepool[\s\S]*Live preview/);
 		assert.equal(ui.theme.name, "tidepool", "moving previews");
@@ -90,10 +90,10 @@ test("applying a previewed palette", async () => {
 test("backups bring their own keys: back up now, restore on the second r", async () => {
 	const calls = [];
 	const { result } = await drive(async (panel, screen) => {
-		let s = screen();
-		assert.match(s, /‹ Backups/, "/palette backups opens straight into the list");
-		assert.match(s, /b back up now · r restore/);
-		assert.match(s, /On this computer/);
+		const s = { value: screen() };
+		assert.match(s.value, /‹ Backups/, "/palette backups opens straight into the list");
+		assert.match(s.value, /b back up now · r restore/);
+		assert.match(s.value, /On this computer/);
 		panel.handleInput("b");
 		await new Promise((r) => setTimeout(r, 10));
 		assert.match(screen(), /Backed up\./);
@@ -117,10 +117,10 @@ test("another key cancels a restore; account runs its actions", async () => {
 		assert.doesNotMatch(screen(), /Press r again/);
 		panel.handleInput(KEY.left);
 		panel.handleInput(KEY.down);
-		const s = screen();
-		assert.match(s, /› Account/);
-		assert.match(s, /@jj on palette\.prjct\.app/);
-		assert.match(s, /s sync · l log out · i import · e export/);
+		const s = { value: screen() };
+		assert.match(s.value, /› Account/);
+		assert.match(s.value, /@jj on palette\.prjct\.app/);
+		assert.match(s.value, /s sync · l log out · i import · e export/);
 		panel.handleInput(KEY.right);
 		assert.match(screen(), /Sends your palettes and favorites/);
 		panel.handleInput(KEY.enter);

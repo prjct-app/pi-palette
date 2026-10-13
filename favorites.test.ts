@@ -28,13 +28,13 @@ test("favorites show in their own category, stay in theirs, and survive reload",
 	const path = join(directory, "nested", "favorites.json");
 	try {
 		assert.deepEqual([...readFavorites(path)], []);
-		let favorites = toggleFavorite("orchard", path);
-		favorites = toggleFavorite("tensor", path);
-		assert.deepEqual(ids(favorites, "favorites"), ["tensor", "orchard"]);
-		assert.ok(ids(favorites, "photo").includes("orchard"));
+		toggleFavorite("orchard", path);
+		const afterTensor = toggleFavorite("tensor", path);
+		assert.deepEqual(ids(afterTensor, "favorites"), ["tensor", "orchard"]);
+		assert.ok(ids(afterTensor, "photo").includes("orchard"));
 		assert.deepEqual([...readFavorites(path)], ["orchard", "tensor"]);
-		favorites = toggleFavorite("orchard", path);
-		assert.deepEqual([...favorites], ["tensor"]);
+		const afterOrchard = toggleFavorite("orchard", path);
+		assert.deepEqual([...afterOrchard], ["tensor"]);
 		assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), ["tensor"]);
 		assert.throws(() => toggleFavorite("not-a-theme", path), /Unknown palette/);
 		writeFileSync(path, "not JSON");

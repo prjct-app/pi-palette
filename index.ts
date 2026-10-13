@@ -1,3 +1,4 @@
+import { migrateLegacyPaletteData } from "./migrate.ts";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -26,6 +27,7 @@ import {
 } from "./cloud.ts";
 import { readFavorites, writeFavorites } from "./favorites.ts";
 import {
+	AGENT_DIR,
 	DATA_DIR,
 	mergePalettes,
 	parseLibrary,
@@ -37,7 +39,7 @@ import {
 	writeUserLibrary,
 	type Library,
 } from "./library.ts";
-import { findPalette, LIBRARY_ERROR, PALETTE_IDS, PALETTES, resolvePaletteArg } from "./palettes.ts";
+import { findPalette, libraryError, PALETTE_IDS, PALETTES, resolvePaletteArg } from "./palettes.ts";
 import { openPalettePanels, type CategoryId, type PickerHost, type PickerInfo } from "./palette-panel.ts";
 import { watchActiveTheme, writeActiveTheme } from "./sync.ts";
 
@@ -91,32 +93,41 @@ function pickerInfo(): PickerInfo {
 	const account = auth
 		? `${auth.username ? `@${auth.username}` : "Connected"} on ${SITE.replace(/^https?:\/\//, "")}`
 		: "Not connected: backups stay on this computer";
-	const backups = factText(state, listVersions().length, Boolean(auth), backupRunning).replace(/^palette backup /, "");
+	const backups = factText(state, listVersions().length, Boolean(auth), backupGate.running).replace(/^palette backup /, "");
 	return { connected: Boolean(auth), account, backups: `${backups} · next check ${nextCheck(state)}` };
 }
 
 /** What the picker reads and runs: backups here and on pi-themes, account state. */
+/** Favorites as a list; unreadable favorites are left out. */
+function favoriteIds(): string[] {
+	try { return [...readFavorites()]; } catch { return []; }
+}
+
+/** Reads a library file to import; the error is returned, never thrown. */
+function readImport(path: string): { library: Library } | { error: unknown } {
+	try { return { library: parseLibrary(readFileSync(path, "utf8")) }; } catch (error) { return { error }; }
+}
+
 function pickerHost(ctx: ExtensionContext): PickerHost {
-	let cloud: CloudVersion[] = [];
-	let problem: string | undefined;
+	const picker = { cloud: [] as CloudVersion[], problem: undefined as string | undefined };
 	return {
 		info: pickerInfo,
 		backups: () => {
 			const local = listVersions();
 			const parts = [`${local.length}/${KEEP} local`];
-			if (readAuth()) parts.push(problem ? `cloud: ${problem}` : `${cloud.length}/${KEEP} cloud`);
+			if (readAuth()) parts.push(picker.problem ? `cloud: ${picker.problem}` : `${picker.cloud.length}/${KEEP} picker.cloud`);
 			parts.push(`next check ${nextCheck(readState())}`);
-			return { local, cloud, cloudProblem: problem, summary: parts.join(" · ") };
+			return { local, cloud: picker.cloud, cloudProblem: picker.problem, summary: parts.join(" · ") };
 		},
 		readBackup: (file) => readVersion(file),
 		refreshCloud: async () => {
 			const auth = readAuth();
-			if (!auth) { cloud = []; problem = undefined; return; }
+			if (!auth) { picker.cloud = []; picker.problem = undefined; return; }
 			try {
-				cloud = await listBackups(auth.token);
-				problem = undefined;
+				picker.cloud = await listBackups(auth.token);
+				picker.problem = undefined;
 			} catch (error) {
-				problem = cloudProblem(error);
+				picker.problem = cloudProblem(error);
 			}
 		},
 		backupNow: () => backup(ctx, "manual"),
@@ -163,13 +174,12 @@ async function importLibrary(ctx: ExtensionCommandContext, arg: string): Promise
 		ctx.ui.notify(`No library found. Try /palette import ~/Downloads/library.json`, "warning");
 		return;
 	}
-	let library: Library;
-	try {
-		library = parseLibrary(readFileSync(path, "utf8"));
-	} catch (error) {
-		ctx.ui.notify(`Could not import ${path}: ${message(error)}`, "error");
+	const loaded = readImport(path);
+	if ('error' in loaded) {
+		ctx.ui.notify(`Could not import ${path}: ${message(loaded.error)}`, "error");
 		return;
 	}
+	const library = loaded.library;
 	const ok = await ctx.ui.confirm(
 		"Import palettes",
 		`${library.palettes.length} palettes and ${library.favorites?.length ?? 0} favorites from ${path}. This replaces your library and favorites.`,
@@ -180,8 +190,7 @@ async function importLibrary(ctx: ExtensionCommandContext, arg: string): Promise
 
 function exportLibrary(ctx: ExtensionContext, arg: string): void {
 	const own = (() => { try { return readUserLibrary(); } catch { return undefined; } })();
-	let favorites: string[] = [];
-	try { favorites = [...readFavorites()]; } catch { /* unreadable favorites are left out */ }
+	const favorites = favoriteIds();
 	const library: Library = {
 		format: "pi-palette",
 		version: 1,
@@ -209,7 +218,7 @@ function openBrowser(url: string): void {
 	} catch { /* the URL is on screen */ }
 }
 
-let stopLogin: (() => void) | undefined;
+const loginSession = { stop: undefined as (() => void) | undefined };
 
 async function login(ctx: ExtensionCommandContext): Promise<void> {
 	const existing = readAuth();
@@ -217,14 +226,11 @@ async function login(ctx: ExtensionCommandContext): Promise<void> {
 		ctx.ui.notify(`Already connected${existing.username ? ` as @${existing.username}` : ""}. /palette sync, or /palette logout`, "info");
 		return;
 	}
-	let link;
-	try {
-		assertSecureSite();
-		link = await startLink(`Pi · ${platform()}`);
-	} catch (error) {
+	const link = await (async () => { assertSecureSite(); return startLink(`Pi · ${platform()}`); })().catch((error: unknown) => {
 		ctx.ui.notify(`Could not reach ${SITE}: ${message(error)}`, "error");
-		return;
-	}
+		return undefined;
+	});
+	if (!link) return;
 	ctx.ui.notify(`Approve code ${link.code} at ${link.url} (signed in). Waiting in the background…`, "info");
 	openBrowser(link.url);
 	void waitForApproval(ctx, link);
@@ -232,13 +238,13 @@ async function login(ctx: ExtensionCommandContext): Promise<void> {
 
 /** Poll until the code is approved on the site, then keep the token on this computer only. */
 async function waitForApproval(ctx: ExtensionContext, link: { poll: string; expiresAt: string }): Promise<void> {
-	stopLogin?.();
-	let stopped = false;
-	stopLogin = () => { stopped = true; };
+	loginSession.stop?.();
+	const waiting = { stopped: false };
+	loginSession.stop = () => { waiting.stopped = true; };
 	const deadline = Date.parse(link.expiresAt) || Date.now() + 10 * 60_000;
-	while (!stopped && Date.now() < deadline) {
+	while (!waiting.stopped && Date.now() < deadline) {
 		await new Promise((r) => setTimeout(r, 3000));
-		if (stopped) return;
+		if (waiting.stopped) return;
 		try {
 			const claim = await claimLink(link.poll);
 			if (claim.status === "ok") {
@@ -252,7 +258,7 @@ async function waitForApproval(ctx: ExtensionContext, link: { poll: string; expi
 			if (claim.status !== "pending") break;
 		} catch { /* a network blip: keep waiting until the code expires */ }
 	}
-	if (!stopped) ctx.ui.notify("The login code expired. Run /palette login again.", "warning");
+	if (!waiting.stopped) ctx.ui.notify("The login code expired. Run /palette login again.", "warning");
 }
 
 async function sync(ctx: ExtensionCommandContext): Promise<void> {
@@ -263,8 +269,7 @@ async function sync(ctx: ExtensionCommandContext): Promise<void> {
 	}
 	try {
 		const local = readUserLibrary();
-		let favorites: string[] = [];
-		try { favorites = [...readFavorites()]; } catch { /* sync the palettes anyway */ }
+		const favorites = favoriteIds();
 		const pushed = await pushLibrary(auth.token, { format: "pi-palette", version: 1, favorites, palettes: local?.palettes ?? [] });
 		const remote = await pullLibrary(auth.token);
 		const active = currentPaletteId(ctx);
@@ -285,7 +290,7 @@ async function sync(ctx: ExtensionCommandContext): Promise<void> {
 
 async function logout(ctx: ExtensionContext): Promise<void> {
 	const auth = readAuth();
-	stopLogin?.();
+	loginSession.stop?.();
 	if (!auth) {
 		ctx.ui.notify("Not connected.", "info");
 		return;
@@ -298,8 +303,7 @@ async function logout(ctx: ExtensionContext): Promise<void> {
 /** The library as it is on this computer now. Throws when the library file cannot be read. */
 function snapshot(ctx: ExtensionContext): Library {
 	const own = readUserLibrary()?.palettes ?? [];
-	let favorites: string[] = [];
-	try { favorites = [...readFavorites()]; } catch { /* back up the palettes anyway */ }
+	const favorites = favoriteIds();
 	const active = currentPaletteId(ctx);
 	return { format: "pi-palette", version: 1, ...(active ? { active } : {}), favorites, palettes: own };
 }
@@ -309,7 +313,7 @@ function safely(fn: () => void): void {
 	try { fn(); } catch { /* that session's UI is gone */ }
 }
 
-let backupRunning = false;
+const backupGate = { running: false };
 
 function cloudProblem(error: unknown): string {
 	if (isNotFound(error)) return `${SITE} does not keep backups yet`;
@@ -331,8 +335,8 @@ type Outcome = { text: string; tone: Tone };
 
 /** One backup run. Never throws: the outcome says what happened, in one line. */
 async function backup(ctx: ExtensionContext, reason: BackupReason): Promise<Outcome> {
-	if (backupRunning) return { text: "A backup is already running.", tone: "muted" };
-	backupRunning = true;
+	if (backupGate.running) return { text: "A backup is already running.", tone: "muted" };
+	backupGate.running = true;
 	try {
 		const auth = readAuth();
 		const client = `Pi · ${platform()}`;
@@ -358,7 +362,7 @@ async function backup(ctx: ExtensionContext, reason: BackupReason): Promise<Outc
 	} catch (error) {
 		return { text: `Palette backup failed: ${message(error)}`, tone: "error" };
 	} finally {
-		backupRunning = false;
+		backupGate.running = false;
 	}
 }
 
@@ -372,25 +376,26 @@ async function backupNow(ctx: ExtensionContext): Promise<void> {
 /** Replace the library with a backed-up version, after saving the current one. */
 async function restore(ctx: ExtensionCommandContext, id: string): Promise<void> {
 	const [side, key = ""] = id.split(/:(.*)/s);
-	let library: Library;
-	let label: string;
-	try {
-		if (side === "cloud") {
-			const auth = readAuth();
-			if (!auth) throw new Error("this Pi is not connected; run /palette login");
-			library = await getBackup(auth.token, key);
-			label = "the cloud backup";
-		} else {
-			const version = readVersion(key);
-			library = version.local;
-			label = `the backup from ${when(version.createdAt)}`;
-		}
-		await saveBeforeRestore(snapshot(ctx));
-	} catch (error) {
-		ctx.ui.notify(`Could not restore: ${isUnauthorized(error) ? "this Pi was disconnected; run /palette login" : message(error)}`, "error");
-		return;
-	}
+	const restored = await loadBackup(side, key)
+		.then(async (loaded) => { await saveBeforeRestore(snapshot(ctx)); return loaded; })
+		.catch((error: unknown) => {
+			ctx.ui.notify(`Could not restore: ${isUnauthorized(error) ? "this Pi was disconnected; run /palette login" : message(error)}`, "error");
+			return undefined;
+		});
+	if (!restored) return;
+	const { library, label } = restored;
 	await installLibrary(ctx, library, `Restored ${label}: ${library.palettes.length} palettes, ${library.favorites?.length ?? 0} favorites`);
+}
+
+/** Loads the backup a restore picked: a cloud version or a local file. */
+async function loadBackup(side: string | undefined, key: string): Promise<{ library: Library; label: string }> {
+	if (side === "cloud") {
+		const auth = readAuth();
+		if (!auth) throw new Error("this Pi is not connected; run /palette login");
+		return { library: await getBackup(auth.token, key), label: "the cloud backup" };
+	}
+	const version = readVersion(key);
+	return { library: version.local, label: `the backup from ${when(version.createdAt)}` };
 }
 
 async function browseBackups(ctx: ExtensionCommandContext): Promise<void> {
@@ -398,7 +403,7 @@ async function browseBackups(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 export default function paletteThemes(pi: ExtensionAPI) {
-	let stopThemeSync: (() => void) | undefined;
+	const themeSync = { stop: undefined as (() => void) | undefined };
 
 	// Theme files are generated from the palettes (bundled + the person's library) on every
 	// load, into Pi's own themes folder: Pi applies the theme in settings before any
@@ -410,12 +415,20 @@ export default function paletteThemes(pi: ExtensionAPI) {
 	} catch { /* the theme files stay as they were */ }
 
 	pi.on("session_start", (_event, ctx) => {
-		stopThemeSync?.();
-		stopThemeSync = undefined;
+		themeSync.stop?.();
+		themeSync.stop = undefined;
+		// Older builds kept palette data inside Pi's folder; move it once, verified, to ~/.prjct.
+		migrateLegacyPaletteData(AGENT_DIR, DATA_DIR)
+			.then((r) => {
+				if (r.moved.length || r.conflicts.length) {
+					ctx.ui.notify(`pi-palette: moved ${r.moved.length} file(s) to ${DATA_DIR}${r.conflicts.length ? `; ${r.conflicts.length} conflicting old file(s) kept in Pi's folder` : ""}`, "info");
+				}
+			})
+			.catch((err: Error) => ctx.ui.notify(`pi-palette: data move failed: ${err.message}`, "error"));
 		if (!ctx.hasUI) return;
 		// Clear the composer status left by an older build after /reload.
 		setFact(ctx, FACT, undefined);
-		if (LIBRARY_ERROR) ctx.ui.notify(LIBRARY_ERROR, "warning");
+		if (libraryError()) ctx.ui.notify(libraryError(), "warning");
 
 		if (existsSync(PENDING_PATH)) {
 			try {
@@ -425,7 +438,7 @@ export default function paletteThemes(pi: ExtensionAPI) {
 			rmSync(PENDING_PATH, { force: true });
 		}
 
-		stopThemeSync = watchActiveTheme((id) => {
+		themeSync.stop = watchActiveTheme((id) => {
 			if (!findPalette(id) || ctx.ui.theme.name === id) return;
 			const result = ctx.ui.setTheme(id);
 			if (!result.success) {
@@ -442,9 +455,9 @@ export default function paletteThemes(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", () => {
-		stopThemeSync?.();
-		stopThemeSync = undefined;
-		stopLogin?.();
+		themeSync.stop?.();
+		themeSync.stop = undefined;
+		loginSession.stop?.();
 	});
 
 	const ACTIONS: Record<string, string> = {

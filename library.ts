@@ -32,7 +32,9 @@ export type Library = {
 };
 
 export const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-export const DATA_DIR = join(AGENT_DIR, "pi-palette");
+/** Extension data lives outside Pi's folder, at ${PRJCT_HOME:-~/.prjct}/pi-palette. */
+export const PRJCT_HOME = process.env.PRJCT_HOME ?? join(homedir(), ".prjct");
+export const DATA_DIR = join(PRJCT_HOME, "pi-palette");
 export const LIBRARY_PATH = join(DATA_DIR, "library.json");
 /**
  * Pi's own themes folder. Pi applies the theme in settings before any extension
@@ -115,14 +117,22 @@ export function cleanPalette(value: unknown): LibraryPalette | undefined {
 	};
 }
 
+function parseOrThrow(text: string): unknown {
+	try { return JSON.parse(text); } catch { throw new Error("not JSON"); }
+}
+
+/** The file's text, or undefined when it cannot be read (a new file, or a dangling symlink). */
+function readOptionalText(path: string): string | undefined {
+	try { return readFileSync(path, "utf8"); } catch { return undefined; }
+}
+
 /** Parse a library (or a single Pi theme file) from untrusted text. Throws with a short reason. */
 export function parseLibrary(text: string): Library {
-	let data: unknown;
-	try { data = JSON.parse(text); } catch { throw new Error("not JSON"); }
-	if (!isObject(data)) throw new Error("not a palette library");
-	if (!Array.isArray(data.palettes) && isObject(data.vars) && typeof data.name === "string") {
-		data = { format: "pi-palette", version: 1, palettes: [{ id: data.name, label: data.name, vars: data.vars, colors: data.colors, export: data.export }] };
-	}
+	const parsed = parseOrThrow(text);
+	if (!isObject(parsed)) throw new Error("not a palette library");
+	const data = !Array.isArray(parsed.palettes) && isObject(parsed.vars) && typeof parsed.name === "string"
+		? { format: "pi-palette", version: 1, palettes: [{ id: parsed.name, label: parsed.name, vars: parsed.vars, colors: parsed.colors, export: parsed.export }] }
+		: parsed;
 	const raw = data as Record<string, unknown>;
 	if (!Array.isArray(raw.palettes)) throw new Error("not a palette library");
 	const seen = new Set<string>();
@@ -241,8 +251,7 @@ export function syncThemeFiles(palettes: LibraryPalette[], dir = THEMES_DIR, own
 		const file = `${p.id}.json`;
 		const path = join(dir, file);
 		const text = `${JSON.stringify(themeJson(p), null, "\t")}\n`;
-		let current: string | undefined;
-		try { current = readFileSync(path, "utf8"); } catch { /* a new file, or a symlink to nothing left by an older palette extension */ }
+		const current = readOptionalText(path);
 		if (current !== undefined && current !== text && !owned.has(file)) continue;
 		if (current !== text || isLink(path)) writeAtomic(path, text);
 		kept.add(file);

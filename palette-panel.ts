@@ -48,6 +48,18 @@ type Item = { id: string; label: string; meta?: string; tag?: string; palette?: 
 type Category = { id: CategoryId; label: string; blurb: string; empty: string; items: Item[]; count: string };
 type Tool = { key: string; label: string };
 
+/** The favorites set, or an empty one with a notice when the favorites file cannot be read. */
+function loadFavorites(): { favorites: Set<string>; notice?: { text: string; tone: Tone } } {
+	try {
+		return { favorites: readFavorites() };
+	} catch (error) {
+		return {
+			favorites: new Set(),
+			notice: { text: `Favorites unavailable: ${error instanceof Error ? error.message : String(error)}`, tone: "error" },
+		};
+	}
+}
+
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 const ACCOUNT_HELP: Record<string, (site: string) => string> = {
@@ -67,13 +79,8 @@ function palettePicker(
 	initial: CategoryId | undefined,
 	done: (value: PickerResult | undefined) => void,
 ): Component & Focusable & { dispose(): void } {
-	let favorites: Set<string>;
-	let notice: { text: string; tone: Tone } | undefined;
-	try { favorites = readFavorites(); }
-	catch (error) {
-		favorites = new Set();
-		notice = { text: `Favorites unavailable: ${error instanceof Error ? error.message : String(error)}`, tone: "error" };
-	}
+	const { favorites, notice: favoritesNotice } = loadFavorites();
+	const view = { notice: favoritesNotice as { text: string; tone: Tone } | undefined };
 	const inUse = ctx.ui.theme.name && PALETTES.some((p) => p.id === ctx.ui.theme.name) ? ctx.ui.theme.name : undefined;
 	const state = {
 		level: "categories" as "categories" | "items",
@@ -130,7 +137,7 @@ function palettePicker(
 		const item = selected();
 		if (!item?.palette) return;
 		const result = ctx.ui.setTheme(item.palette.id);
-		if (!result.success) notice = { text: result.error ?? `Could not preview ${item.label}`, tone: "error" };
+		if (!result.success) view.notice = { text: result.error ?? `Could not preview ${item.label}`, tone: "error" };
 	};
 	const close = (result: PickerResult | undefined) => {
 		if (state.closed) return;
@@ -176,12 +183,12 @@ function palettePicker(
 	async function backupNow(): Promise<void> {
 		if (state.busy) return;
 		state.busy = true;
-		notice = { text: "Backing up…", tone: "muted" };
+		view.notice = { text: "Backing up…", tone: "muted" };
 		request();
 		const outcome = await host.backupNow();
 		await host.refreshCloud().catch(() => {});
 		state.busy = false;
-		notice = outcome;
+		view.notice = outcome;
 		request();
 	}
 
@@ -327,43 +334,42 @@ function palettePicker(
 			const c = category();
 			const item = selected(c);
 
-			let left: string[];
-			let right: string[];
+			const pane = { left: [] as string[], right: [] as string[] };
 			if (state.level === "categories") {
 				const index = list.findIndex((x) => x.id === c.id);
-				left = list.map((x) => {
+				pane.left = list.map((x) => {
 					const chosen = x.id === c.id;
 					const label = chosen ? accent(theme.bold(x.label)) : x.label;
 					return `${chosen ? accent(theme.bold("›")) : " "} ${label}`;
 				});
 				// Room for the counts, right-aligned in the pane.
-				left = left.map((line, i) => {
+				pane.left = pane.left.map((line, i) => {
 					const count = dim(list[i]!.count);
 					return fit(line, Math.max(1, leftWidth - list[i]!.count.length - 1)) + " " + count;
 				});
 				// A rule between the themes and the rest.
-				left.splice(list.findIndex((x) => x.id === "backups"), 0, dim("─".repeat(Math.max(1, leftWidth - 1))));
-				left = windowed(left, index, bodyHeight);
-				right = contents(c, bodyHeight);
+				pane.left.splice(list.findIndex((x) => x.id === "backups"), 0, dim("─".repeat(Math.max(1, leftWidth - 1))));
+				pane.left = windowed(pane.left, index, bodyHeight);
+				pane.right = contents(c, bodyHeight);
 			} else {
 				const cursor = Math.max(0, c.items.findIndex((x) => x.id === item?.id));
-				left = [
+				pane.left = [
 					accent(theme.bold(`‹ ${c.label}`)),
 					...windowed(c.items.map((x) => itemLine(c, x, x.id === item?.id, true)), cursor, bodyHeight - 1),
 				];
-				right = detail(c, item);
+				pane.right = detail(c, item);
 			}
 
 			const confirm = state.confirm ? { text: `Press r again to restore ${item?.label ?? "it"} · any other key cancels`, tone: "warning" as Tone } : undefined;
-			const message = confirm ?? notice;
+			const message = confirm ?? view.notice;
 			const showing = PALETTES.find((p) => p.id === ctx.ui.theme.name)?.label;
 			const title = ` ${accent(theme.bold("Palette"))}  ${dim(`${PALETTES.length} themes · ${favorites.size} favorites${showing ? ` · ${showing}` : ""}`)}`;
 			const body = Array.from({ length: bodyHeight }, (_, i) => {
 				if (!wide) {
-					const pane = state.level === "items" && state.showDetail ? right : left;
-					return ` ${fit(pane[i] ?? "", Math.max(1, width - 2))} `;
+					const shown = state.level === "items" && state.showDetail ? pane.right : pane.left;
+					return ` ${fit(shown[i] ?? "", Math.max(1, width - 2))} `;
 				}
-				return `${fit(left[i] ?? "", leftWidth)} ${dim("│")} ${fit(right[i] ?? "", rightWidth)}`;
+				return `${fit(pane.left[i] ?? "", leftWidth)} ${dim("│")} ${fit(pane.right[i] ?? "", rightWidth)}`;
 			});
 			const own = tools();
 			const nav = navigation();
@@ -382,7 +388,7 @@ function palettePicker(
 			const item = state.level === "items" ? selected(c) : undefined;
 			const wasConfirm = state.confirm;
 			state.confirm = undefined;
-			if (!state.busy) notice = undefined;
+			if (!state.busy) view.notice = undefined;
 
 			// Navigation, the same everywhere.
 			if (matchesKey(data, Key.escape) || data === "q") {
@@ -401,8 +407,12 @@ function palettePicker(
 			}
 			// The category's own keys.
 			else if (isTheme(c.id) && item?.palette && data === "f") {
-				try { favorites = toggleFavorite(item.id); }
-				catch (error) { notice = { text: `Could not save favorite: ${error instanceof Error ? error.message : String(error)}`, tone: "error" }; }
+				try {
+					const saved = toggleFavorite(item.id);
+					favorites.clear();
+					for (const id of saved) favorites.add(id);
+				}
+				catch (error) { view.notice = { text: `Could not save favorite: ${error instanceof Error ? error.message : String(error)}`, tone: "error" }; }
 				// Unstarring inside Favorites moves the cursor to what is left.
 				if (c.id === "favorites" && !favorites.has(item.id)) {
 					const rest = category().items;
@@ -411,7 +421,7 @@ function palettePicker(
 				}
 			} else if (isTheme(c.id) && item?.palette && (data === "a" || matchesKey(data, Key.enter))) {
 				preview();
-				if (!notice) close({ apply: item.id });
+				if (!view.notice) close({ apply: item.id });
 			} else if (c.id === "backups" && data === "b") {
 				void backupNow();
 			} else if (c.id === "backups" && item && data === "r") {

@@ -1,19 +1,26 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_DIR, writePrivate } from "./library.ts";
+import { DATA_DIR, writePrivate } from "./library.ts";
 import { PALETTE_IDS } from "./palettes.ts";
 
-const FAVORITES_PATH = join(AGENT_DIR, "palette-favorites.json");
+const FAVORITES_PATH = join(DATA_DIR, "palette-favorites.json");
 const knownIds = new Set(PALETTE_IDS);
 
-export function readFavorites(path = FAVORITES_PATH): Set<string> {
-	let data: unknown;
+const missing = Symbol("missing");
+
+/** The parsed file, or `missing` when there is no file. Other read errors propagate. */
+function readJsonFile(path: string): unknown {
 	try {
-		data = JSON.parse(readFileSync(path, "utf8"));
+		return JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return new Set();
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return missing;
 		throw error;
 	}
+}
+
+export function readFavorites(path = FAVORITES_PATH): Set<string> {
+	const data = readJsonFile(path);
+	if (data === missing) return new Set();
 	if (!Array.isArray(data) || !data.every((id: unknown) => typeof id === "string")) {
 		throw new Error("Invalid palette favorites file");
 	}

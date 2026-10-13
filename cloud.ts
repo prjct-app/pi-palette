@@ -66,13 +66,17 @@ async function api<T>(path: string, init: { method?: string; token?: string; bod
 		redirect: "error",
 	});
 	const text = await res.text();
-	let data: unknown;
-	try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+	const data: unknown = parseJsonOr(text, {});
 	if (!res.ok) {
 		const message = typeof (data as { error?: unknown }).error === "string" ? (data as { error: string }).error : `HTTP ${res.status}`;
 		throw new ApiError(res.status, message);
 	}
 	return data as T;
+}
+
+/** JSON from the site, or the fallback when the body is empty or not JSON. */
+function parseJsonOr(text: string, fallback: unknown): unknown {
+	try { return text ? JSON.parse(text) : fallback; } catch { return fallback; }
 }
 
 export type LinkStart = { code: string; poll: string; url: string; expiresAt: string };

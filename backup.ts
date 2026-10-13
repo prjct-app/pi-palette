@@ -135,8 +135,8 @@ export function readVersion(file: string, dir = BACKUP_DIR): Version {
 
 /** Local versions, newest first. Unreadable files are skipped. */
 export function listVersions(dir = BACKUP_DIR): VersionInfo[] {
-	let files: string[];
-	try { files = readdirSync(dir).filter((f) => FILE.test(f)); } catch { return []; }
+	const files = listFiles(dir);
+	if (!files) return [];
 	const out: VersionInfo[] = [];
 	for (const file of files.sort().reverse()) {
 		try {
@@ -179,28 +179,40 @@ export function writeVersion(version: Version, dir = BACKUP_DIR, keep = KEEP): s
 		if (sameLocal && sameCloud) return undefined;
 	}
 	const date = new Date(version.createdAt);
-	let file = fileFor(Number.isNaN(date.getTime()) ? new Date() : date);
+	const first = fileFor(Number.isNaN(date.getTime()) ? new Date() : date);
 	// Newest stays last even within one millisecond, or when the clock went back.
-	if (newest && file <= newest.file) file = fileFor(new Date(dateOf(newest.file).getTime() + 1));
+	const file = newest && first <= newest.file ? fileFor(new Date(dateOf(newest.file).getTime() + 1)) : first;
 	writePrivate(join(dir, file), `${JSON.stringify(version, null, "\t")}\n`);
 	prune(dir, keep);
 	return file;
 }
 
+function listFiles(dir: string): string[] | undefined {
+	try { return readdirSync(dir).filter((f) => FILE.test(f)); } catch { return undefined; }
+}
+
+/** Opens the lock file, taking over a lock left by a Pi that died; undefined when another Pi holds it. */
+function acquireLock(path: string): number | undefined {
+	try {
+		return openSync(path, "wx", 0o600);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		const age = lockAge(path);
+		if (age < STALE_LOCK_MS) return undefined;
+		rmSync(path, { force: true });
+		try { return openSync(path, "wx", 0o600); } catch { return undefined; }
+	}
+}
+
+function lockAge(path: string): number {
+	try { return Date.now() - statSync(path).mtimeMs; } catch { return 0; /* just released */ }
+}
+
 /** Run `fn` unless another Pi is backing up right now. */
 async function withLock<T>(path: string, fn: () => Promise<T>): Promise<T | undefined> {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-	let fd: number;
-	try {
-		fd = openSync(path, "wx", 0o600);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-		let age = 0;
-		try { age = Date.now() - statSync(path).mtimeMs; } catch { /* just released */ }
-		if (age < STALE_LOCK_MS) return undefined;
-		rmSync(path, { force: true });
-		try { fd = openSync(path, "wx", 0o600); } catch { return undefined; }
-	}
+	const fd = acquireLock(path);
+	if (fd === undefined) return undefined;
 	try {
 		writeSync(fd, String(process.pid));
 		return await fn();
@@ -252,23 +264,26 @@ export async function runBackup(options: BackupOptions): Promise<BackupResult | 
 	return withLock(options.lockPath ?? LOCK_PATH, async () => {
 		const state = readState(statePath);
 		const { exportedAt: _ignored, ...local } = options.local;
-		let cloud: (Library & { user?: string }) | undefined;
-		let cloudCount: number | undefined;
-		let cloudError: string | undefined;
-		let unauthorized = false;
+		const sync = {
+			cloud: undefined as (Library & { user?: string }) | undefined,
+			cloudCount: undefined as number | undefined,
+			cloudError: undefined as string | undefined,
+			unauthorized: false,
+		};
 		if (options.cloud) {
 			try {
 				// Pull first: the copy saved here is the cloud as it was before this push.
-				cloud = await options.cloud.pull();
-				cloudCount = (await options.cloud.push(local)).count;
+				sync.cloud = await options.cloud.pull();
+				sync.cloudCount = (await options.cloud.push(local)).count;
 			} catch (error) {
-				cloudError = message(error);
-				unauthorized = options.isUnauthorized?.(error) ?? false;
+				sync.cloudError = message(error);
+				sync.unauthorized = options.isUnauthorized?.(error) ?? false;
 			}
 		}
-		let user: string | undefined;
-		let cloudLibrary: Library | undefined;
-		if (cloud) ({ user, ...cloudLibrary } = cloud);
+		const { cloudCount, cloudError, unauthorized } = sync;
+		const { user, library: cloudLibrary } = sync.cloud
+			? (({ user: pulledUser, ...library }) => ({ user: pulledUser, library: library as Library }))(sync.cloud)
+			: { user: undefined, library: undefined };
 		const version: Version = {
 			format: "pi-palette-backup",
 			version: 1,

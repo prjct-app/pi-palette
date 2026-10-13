@@ -1,6 +1,6 @@
 {
   "name": "@prjct.app/pi-palette",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "34 Pi color themes as data: live preview, favorites, synced sessions, weekly versioned backups, and your own library from pi-themes by file or optional account sync.",
   "type": "module",
   "license": "MIT",
@@ -46,7 +46,7 @@
     "docs/cover-v2.png"
   ],
   "scripts": {
-    "test": "node --import tsx --test --test-concurrency=1 *.test.ts *.test.mjs",
+    "test": "export PI_CODING_AGENT_DIR=\"$(mktemp -d)\" PRJCT_HOME=\"$(mktemp -d)\" && node --import tsx --test --test-concurrency=1 *.test.ts *.test.mjs",
     "check:package": "npm pack --dry-run --ignore-scripts",
     "check": "tsc --noEmit",
     "build:pi": "node scripts/build-pi.mjs",

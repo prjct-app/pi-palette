@@ -117,8 +117,8 @@ test("a cloud failure never costs the local backup, and a rejected token is flag
 test("one backup at a time across Pi windows", async () => {
 	const box = sandbox();
 	try {
-		let release!: () => void;
-		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const release = { run: (): void => undefined };
+		const gate = new Promise<void>((resolve) => { release.run = resolve; });
 		const slow = runBackup({
 			local: library("a"),
 			reason: "weekly",
@@ -127,7 +127,7 @@ test("one backup at a time across Pi windows", async () => {
 		});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		assert.equal(await runBackup({ local: library("a"), reason: "weekly", ...box.paths }), undefined);
-		release();
+		release.run();
 		assert.equal((await slow)?.written, true);
 		// A lock left by a Pi that died long ago does not block forever.
 		writeFileSync(box.paths.lockPath, "123");

@@ -11,9 +11,10 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DATA_DIR } from "./library.ts";
 
 const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-export const SYNC_PATH = join(agentDir, "palette-sync.json");
+export const SYNC_PATH = join(DATA_DIR, "palette-sync.json");
 const SETTINGS_PATH = join(agentDir, "settings.json");
 
 type SyncPayload = {
@@ -39,7 +40,7 @@ function mtime(path: string): number {
 }
 
 export function writeActiveTheme(id: string): void {
-	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(DATA_DIR, { recursive: true });
 	const payload: SyncPayload = { theme: id, at: Date.now() };
 	const tmp = `${SYNC_PATH}.${process.pid}.tmp`;
 	writeFileSync(tmp, `${JSON.stringify(payload)}\n`);
@@ -59,16 +60,16 @@ export function watchActiveTheme(
 	onChange: (theme: string) => void,
 	interval = 200,
 ): () => void {
-	let active = true;
+	const watch = { active: true };
 	const listener = (current: Stats, previous: Stats): void => {
-		if (!active || current.mtimeMs === 0 || current.mtimeMs === previous.mtimeMs) return;
+		if (!watch.active || current.mtimeMs === 0 || current.mtimeMs === previous.mtimeMs) return;
 		const theme = readActiveTheme();
 		if (theme) onChange(theme);
 	};
 
 	watchFile(SYNC_PATH, { interval, persistent: false }, listener);
 	return () => {
-		active = false;
+		watch.active = false;
 		unwatchFile(SYNC_PATH, listener);
 	};
 }
