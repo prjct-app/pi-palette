@@ -36,8 +36,6 @@ export function writeFavorites(ids: Iterable<string>, path = FAVORITES_PATH): Se
 
 export function toggleFavorite(id: string, path = FAVORITES_PATH): Set<string> {
 	if (!knownIds.has(id)) throw new Error(`Unknown palette: ${id}`);
-	const favorites = readFavorites(path);
-	if (favorites.has(id)) favorites.delete(id);
-	else favorites.add(id);
-	return writeFavorites(favorites, path);
+	const favorites = [...readFavorites(path)];
+	return writeFavorites(favorites.includes(id) ? favorites.filter((saved) => saved !== id) : [...favorites, id], path);
 }
